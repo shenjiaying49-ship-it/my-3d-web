@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>高达基地 · 我的 3D 小家</title>
+  <style>
+    :root { --acc: #ff5040; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0e1b; }
+    canvas { display: block; }
+
+    .ui { position: fixed; z-index: 10; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+
+    .title { top: 26px; left: 30px; color: #eef2ff; pointer-events: none; }
+    .title h1 { font-size: 22px; font-weight: 700; letter-spacing: 2px; }
+    .title p { margin-top: 6px; font-size: 13px; opacity: .6; }
+
+    .hint { top: 28px; right: 30px; font-size: 12px; color: #cfd6ea; opacity: .55; pointer-events: none; text-align: right; line-height: 1.9; }
+    .hint kbd { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.22); border-radius: 4px; padding: 1px 6px; }
+
+    .chips { bottom: 24px; left: 50%; transform: translateX(-50%); text-align: center; }
+    #status { display: block; font-size: 13px; color: #cfd6ea; margin-bottom: 10px; }
+    #status b { color: var(--acc); }
+    .chip-row { display: flex; gap: 10px; justify-content: center; }
+    .chip {
+      background: rgba(20,24,38,.72); border: 1px solid rgba(255,255,255,.16);
+      color: #dfe6f5; padding: 8px 20px; border-radius: 20px; cursor: pointer;
+      font-size: 14px; backdrop-filter: blur(6px); transition: .25s; font-family: inherit;
+    }
+    .chip:hover { border-color: rgba(255,255,255,.45); }
+    .chip.active { border-color: var(--acc); color: #fff; background: rgba(32,36,54,.9); box-shadow: 0 0 16px color-mix(in srgb, var(--acc) 55%, transparent); }
+
+    .panel {
+      right: 26px; bottom: 26px; width: 300px; color: #e8edf8;
+      background: rgba(15,18,30,.8); border: 1px solid rgba(255,255,255,.14);
+      border-left: 3px solid var(--acc); border-radius: 14px; padding: 16px 18px;
+      opacity: 0; transform: translateY(14px); transition: .4s; pointer-events: none;
+      backdrop-filter: blur(8px);
+    }
+    .panel.show { opacity: 1; transform: none; }
+    .panel h2 { font-size: 18px; margin-bottom: 6px; }
+    .panel .desc { font-size: 13px; line-height: 1.75; opacity: .82; }
+    .panel .meta { margin-top: 10px; font-size: 12px; color: var(--acc); }
+
+    #err { display: none; position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+      background: #5c1a1a; color: #ffd7d7; padding: 8px 16px; border-radius: 8px; font-size: 12px; z-index: 99; }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div class="ui title">
+    <h1>GUNDAM BASE 🤖</h1>
+    <p>我的 3D 小家 · 每个房间 = 一个 base 地</p>
+  </div>
+  <div class="ui hint">
+    <kbd>左键拖拽</kbd> 旋转 · <kbd>滚轮</kbd> 缩放 · <kbd>右键</kbd> 平移<br/>
+    点击房间 / 底部按钮 → 飞到那个 base
+  </div>
+  <div class="ui chips">
+    <span id="status">📍 当前基地：—</span>
+    <div class="chip-row" id="chips"></div>
+  </div>
+  <div class="ui panel" id="panel">
+    <h2 id="panel-title"></h2>
+    <p class="desc" id="panel-desc"></p>
+    <p class="meta" id="panel-meta"></p>
+  </div>
+  <div id="err"></div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    /* ══════════════════════════════════════════════════════════
+     * ★★ 在这里更新你的当前位置（不定期换 base 就改这一行）★★
+     *    可选：beijing | shanghai | hangzhou | shenzhen
+     *    也可以不改代码，直接用链接参数：?base=shenzhen
+     * ══════════════════════════════════════════════════════════ */
+    const MY_CURRENT_BASE = "beijing";
+
+    // 四个 base 城市：颜色 / 位置（哪层哪侧）/ 房间描述
+    const CITIES = {
+      beijing: {
+        name: "北京", color: 0xff5040, css: "#ff5040", accent: 0xb03a2e,
+        pos: { x: -2.25, y: 0.35 }, meta: "一层 · 西侧 · 故宫红墙房",
+        desc: "红墙、天坛模型和一盏小灯笼——皇城根儿的历史感。冬天来一串冰糖葫芦，就是北京的味道。",
+      },
+      shanghai: {
+        name: "上海", color: 0xff7ab8, css: "#ff7ab8", accent: 0x8d7a9b,
+        pos: { x: 2.25, y: 0.35 }, meta: "一层 · 东侧 · 石库门房",
+        desc: "东方明珠亮灯的夜晚，石库门里飘着咖啡香。这座城市永远醒着。",
+      },
+      hangzhou: {
+        name: "杭州", color: 0x51d88a, css: "#51d88a", accent: 0x5e7d5a,
+        pos: { x: -2.25, y: 2.79 }, meta: "二层 · 西侧 · 西湖房",
+        desc: "窗外是西湖的水汽，桌上有刚泡的龙井。断桥、柳树和雷峰塔，都在这个房间里。",
+      },
+      shenzhen: {
+        name: "深圳", color: 0x4dabf7, css: "#4dabf7", accent: 0x2a4a7f,
+        pos: { x: 2.25, y: 2.79 }, meta: "二层 · 东侧 · 科技园房",
+        desc: "科技园的双屏工作台，窗外是平安大厦的霓虹。凌晨四点，代码和梦想都在跑。",
+      },
+    };
+
+    const urlBase = new URLSearchParams(location.search).get("base");
+    const initialBase = CITIES[urlBase] ? urlBase : MY_CURRENT_BASE;
+
+    window.addEventListener('error', e => {
+      const el = document.getElementById('err');
+      el.style.display = 'block';
+      el.textContent = '⚠ ' + (e.message || e.error);
+    });
+
+    /* ══════════ 基础三件套：场景 / 相机 / 渲染器 ══════════ */
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0e1b);
+    scene.fog = new THREE.Fog(0x0a0e1b, 70, 160);
+
+    const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 500);
+    camera.position.set(17, 9, 20);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(2.5, 2.8, 0);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+    controls.minDistance = 6;
+    controls.maxDistance = 60;
+    controls.maxPolarAngle = Math.PI * 0.495;
+
+    /* ══════════ 灯光：月光 + 半球环境 + 每间房一盏暖光 ══════════ */
+    scene.add(new THREE.HemisphereLight(0x4a5a8a, 0x2a2018, 0.6));
+    const moonLight = new THREE.DirectionalLight(0xa9bfff, 1.1);
+    moonLight.position.set(14, 22, 9);
+    moonLight.castShadow = true;
+    moonLight.shadow.mapSize.set(2048, 2048);
+    moonLight.shadow.camera.left = -18; moonLight.shadow.camera.right = 18;
+    moonLight.shadow.camera.top = 18;  moonLight.shadow.camera.bottom = -18;
+    moonLight.shadow.camera.far = 60;
+    moonLight.shadow.bias = -0.0004;
+    moonLight.shadow.normalBias = 0.08;
+    scene.add(moonLight);
+    // 补光：从镜头一侧轻轻抬亮高达和房子的背光面
+    const fillLight = new THREE.DirectionalLight(0xbfd4ff, 0.35);
+    fillLight.position.set(-10, 12, 16);
+    scene.add(fillLight);
+
+    /* ══════════ 材质 & 小工具（所有小物件的原点都在"脚底"，方便摆放） ══════════ */
+    const std = (c, o = {}) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.85, ...o });
+    const glow = (c, i = 1.6) => new THREE.MeshStandardMaterial({ color: 0x111318, emissive: c, emissiveIntensity: i, roughness: 0.6 });
+
+    function box(w, h, d, mat) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      m.castShadow = true; m.receiveShadow = true; return m;
+    }
+    function cyl(rt, rb, h, mat, seg = 24) {
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg), mat);
+      m.castShadow = true; m.receiveShadow = true; return m;
+    }
+    function sph(r, mat, seg = 20) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(r, seg, seg), mat);
+      m.castShadow = true; m.receiveShadow = true; return m;
+    }
+    function cone(r, h, mat, seg = 24) {
+      const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, seg), mat);
+      m.castShadow = true; m.receiveShadow = true; return m;
+    }
+    const put = (m, x, y, z, ry = 0) => { m.position.set(x, y, z); if (ry) m.rotation.y = ry; return m; };
+
+    /* ══════════ 展示台底座（高达模型展示台的感觉） ══════════ */
+    const platform = cyl(16.5, 17.5, 0.8, std(0x181b24, { roughness: 0.7, metalness: 0.2 }), 48);
+    put(platform, 0, -0.28, 0);
+    platform.receiveShadow = true; platform.castShadow = false;
+    scene.add(platform);
+    const grass = cyl(14.2, 14.2, 0.1, std(0x2c4230, { roughness: 1 }), 48);
+    put(grass, 0, 0.07, 0);
+    grass.receiveShadow = true; grass.castShadow = false;
+    scene.add(grass);
+
+    // 底座上两棵装饰树
+    function makeTree(scale = 1) {
+      const g = new THREE.Group();
+      g.add(put(cyl(0.28, 0.2, 0.32, std(0x8a5a3a)), 0, 0.16, 0));
+      g.add(put(cyl(0.06, 0.09, 0.7, std(0x6a4a30)), 0, 0.6, 0));
+      const f1 = put(sph(0.55, std(0x4e7a45)), 0, 1.15, 0); f1.scale.y = 0.8;
+      const f2 = put(sph(0.38, std(0x5f8f52)), 0.28, 1.42, 0.1);
+      g.add(f1, f2);
+      g.scale.setScalar(scale);
+      return g;
+    }
+    scene.add(put(makeTree(1.9), -9.2, 0.12, 3.2));
+    scene.add(put(makeTree(1.3), -10.8, 0.12, -4.2));
+    scene.add(put(makeTree(1.5), 7.5, 0.12, -7.8));
+
+    /* ══════════ 楼体（外观参考：白墙+木饰面+黑框玻璃；结构参考：剖面娃娃屋） ══════════ */
+    const F1 = 0.35, F2 = 2.79, WALL_H = 2.2, ROOF_Y = 4.99;
+    const house = new THREE.Group();
+    scene.add(house);
+
+    const wallWhite = std(0xf2efe9, { roughness: 0.9 });
+    const wood = std(0xb0885a, { roughness: 0.8 });
+    const woodDark = std(0x6b4a33, { roughness: 0.75 });
+    const frameBlack = std(0x1a1a20, { roughness: 0.5, metalness: 0.4 });
+    const glassWarm = new THREE.MeshStandardMaterial({
+      color: 0x1a1c26, emissive: 0xffc88a, emissiveIntensity: 0.55, roughness: 0.2, metalness: 0.3,
+    });
+
+    // 地基 / 楼板 / 墙
+    house.add(put(box(9.6, 0.26, 7.1, wood), 0, 0.22, 0));           // 一层地板
+    house.add(put(box(9, 0.24, 6.5, wood), 0, 2.67, 0));             // 二层楼板
+    house.add(put(box(9, 4.87, 0.3, wallWhite), 0, 2.555, -3.1));    // 后墙
+    house.add(put(box(0.3, 4.87, 6.5, wallWhite), -4.35, 2.555, 0)); // 左墙
+    house.add(put(box(0.3, 4.87, 6.5, wallWhite), 4.35, 2.555, 0));  // 右墙
+    // 前侧做"剖面"：只留柱子和矮墙，方便看到房间内部
+    house.add(put(box(0.3, 4.87, 0.3, wallWhite), -4.35, 2.555, 3.1));
+    house.add(put(box(0.3, 4.87, 0.3, wallWhite), 4.35, 2.555, 3.1));
+    house.add(put(box(9, 0.6, 0.3, wallWhite), 0, 0.42, 3.1));
+    // 房间隔墙（一层 / 二层）
+    house.add(put(box(0.14, 2.2, 3.7, wallWhite), 0, 1.45, -1.05));
+    house.add(put(box(0.14, 2.2, 3.7, wallWhite), 0, 3.89, -1.05));
+    // 侧墙黑框玻璃窗 ×8
+    [[-1.7, 1.45], [1.7, 1.45], [-1.7, 3.89], [1.7, 3.89]].forEach(([z, y]) => {
+      [-1, 1].forEach(s => {
+        house.add(put(box(0.07, 1.3, 1.0, frameBlack), s * 4.52, y, z));
+        house.add(put(box(0.05, 1.1, 0.82, glassWarm), s * 4.56, y, z));
+      });
+    });
+
+    // 屋顶（木色斜屋顶 + 山墙）
+    const slope = Math.atan2(1.8, 3.75);
+    const roofF = put(box(10.2, 0.18, 4.3, woodDark), 0, 5.86, 1.93); roofF.rotation.x = slope;
+    const roofB = put(box(10.2, 0.18, 4.3, woodDark), 0, 5.86, -1.93); roofB.rotation.x = -slope;
+    house.add(roofF, roofB);
+    house.add(put(box(10.3, 0.12, 0.35, woodDark), 0, 6.85, 0)); // 屋脊
+    const gableShape = new THREE.Shape();
+    gableShape.moveTo(-3.84, 0); gableShape.lineTo(3.84, 0); gableShape.lineTo(0, 1.8);
+    const gableGeo = new THREE.ExtrudeGeometry(gableShape, { depth: 0.3, bevelEnabled: false });
+    const gableR = new THREE.Mesh(gableGeo, wallWhite);
+    gableR.rotation.y = Math.PI / 2; gableR.position.set(4.2, 5.04, 0);
+    const gableL = gableR.clone(); gableL.position.set(-4.5, 5.04, 0);
+    gableR.castShadow = gableL.castShadow = true;
+    house.add(gableR, gableL);
+
+    // 二层露台（参考照片的屋顶花园：黑栏杆 + 盆栽 + 长凳）
+    house.add(put(box(4.0, 0.15, 2.4, wood), -2.2, 2.715, 4.45));
+    [[-4.17, 5.62], [-0.23, 5.62], [-4.17, 3.28], [-0.23, 3.28]].forEach(([x, z]) =>
+      house.add(put(box(0.06, 0.95, 0.06, frameBlack), x, 3.265, z)));
+    house.add(put(box(4.0, 0.06, 0.06, frameBlack), -2.2, 3.74, 5.62));
+    house.add(put(box(0.06, 0.06, 2.4, frameBlack), -4.17, 3.74, 4.45));
+    house.add(put(box(0.06, 0.06, 2.4, frameBlack), -0.23, 3.74, 4.45));
+    house.add(put(cyl(0.09, 0.09, 2.45, frameBlack, 12), -3.6, 1.375, 5.4));
+    house.add(put(cyl(0.09, 0.09, 2.45, frameBlack, 12), -0.9, 1.375, 5.4));
+    house.add(put(makeTree(1.0), -3.4, 2.79, 4.6)); // 露台盆栽
+    house.add(put(box(1.4, 0.08, 0.45, woodDark), -1.4, 3.05, 4.7));
+    house.add(put(box(0.08, 0.17, 0.4, frameBlack), -1.95, 2.96, 4.7));
+    house.add(put(box(0.08, 0.17, 0.4, frameBlack), -0.85, 2.96, 4.7));
+
+    /* ══════════ 家具工厂（每间的原点在房间地面） ══════════ */
+    function makeBed(blanket) {
+      const g = new THREE.Group();
+      g.add(put(box(1.7, 0.35, 2.6, woodDark), 0, 0.175, 0));
+      g.add(put(box(1.6, 0.28, 2.5, std(0xf5f2ea)), 0, 0.49, 0));
+      g.add(put(box(1.62, 0.16, 1.55, std(blanket)), 0, 0.66, 0.42));
+      g.add(put(box(1.1, 0.15, 0.5, std(0xffffff)), 0, 0.68, -0.95));
+      return g;
+    }
+    function makeRug(r, c) {
+      const m = cyl(r, r, 0.05, std(c, { roughness: 1 }), 32);
+      m.castShadow = false; return m;
+    }
+    function makeDesk(screenA, screenB) {
+      const g = new THREE.Group();
+      g.add(put(box(1.8, 0.08, 0.9, woodDark), 0, 0.78, 0));
+      g.add(put(box(0.08, 0.78, 0.85, frameBlack), -0.85, 0.39, 0));
+      g.add(put(box(0.08, 0.78, 0.85, frameBlack), 0.85, 0.39, 0));
+      const screens = [[-0.42, screenA], [screenB ? 0.42 : 0, screenB || screenA]];
+      screens.forEach(([sx, sc]) => {
+        g.add(put(box(0.72, 0.46, 0.05, frameBlack), sx, 1.12, -0.18));
+        g.add(put(box(0.62, 0.36, 0.02, glow(sc, 1.8)), sx, 1.12, -0.14));
+        g.add(put(box(0.1, 0.14, 0.1, frameBlack), sx, 0.86, -0.18));
+      });
+      return g;
+    }
+    function makeLamp() {
+      const g = new THREE.Group();
+      g.add(put(cyl(0.035, 0.05, 0.9, frameBlack), 0, 0.45, 0));
+      g.add(put(sph(0.15, glow(0xffd9a0, 2.2), 16), 0, 0.98, 0));
+      return g;
+    }
+
+    /* ── 城市元素小模型 ── */
+    function makeTemple() { // 北京 · 天坛
+      const g = new THREE.Group();
+      g.add(put(cyl(0.55, 0.55, 0.06, woodDark), 0, 0.03, 0));
+      g.add(put(cyl(0.42, 0.5, 0.28, std(0xa03a2e)), 0, 0.34, 0));
+      g.add(put(cyl(0.34, 0.42, 0.5, std(0xa03a2e)), 0, 0.73, 0));
+      g.add(put(cone(0.56, 0.42, std(0x3a5fa8)), 0, 1.19, 0));
+      g.add(put(sph(0.06, std(0xe8c34a, { metalness: 0.6, roughness: 0.3 })), 0, 1.46, 0));
+      return g;
+    }
+    function makeLantern() { // 北京 · 红灯笼（挂在天花板）
+      const g = new THREE.Group();
+      g.add(put(cyl(0.015, 0.015, 0.75, frameBlack, 8), 0, -0.375, 0));
+      g.add(put(cyl(0.08, 0.08, 0.05, std(0xe8c34a), 12), 0, -0.78, 0));
+      const b = put(sph(0.24, glow(0xff4433, 0.9), 16), 0, -1.0, 0); b.scale.y = 0.85;
+      g.add(b);
+      return g;
+    }
+    function makePearlTower() { // 上海 · 东方明珠
+      const g = new THREE.Group();
+      g.add(put(cyl(0.3, 0.42, 0.15, std(0x9a8a92)), 0, 0.075, 0));
+      g.add(put(cyl(0.1, 0.16, 1.5, std(0xd0909f)), 0, 0.9, 0));
+      g.add(put(sph(0.36, std(0xd0909f, { roughness: 0.4 })), 0, 1.28, 0));
+      g.add(put(sph(0.2, std(0xd0909f, { roughness: 0.4 })), 0, 2.0, 0));
+      g.add(put(cyl(0.03, 0.03, 0.45, frameBlack, 8), 0, 2.3, 0));
+      return g;
+    }
+    function makeShikumen() { // 上海 · 石库门门头（贴在隔墙上）
+      const g = new THREE.Group();
+      g.add(put(box(1.05, 1.5, 0.1, std(0x7a3a2e)), 0, 0.75, 0));
+      g.add(put(box(0.8, 1.2, 0.07, std(0x2a2018)), 0, 0.6, 0.03));
+      g.add(put(box(1.18, 0.16, 0.14, std(0x7a3a2e)), 0, 1.56, 0.02));
+      g.add(put(sph(0.035, std(0xe8c34a, { metalness: 0.7, roughness: 0.3 }), 8), -0.24, 0.62, 0.09));
+      g.add(put(sph(0.035, std(0xe8c34a, { metalness: 0.7, roughness: 0.3 }), 8), 0.24, 0.62, 0.09));
+      return g;
+    }
+    function makeBridge() { // 杭州 · 西湖断桥（水面 + 拱桥）
+      const g = new THREE.Group();
+      const water = cyl(1.05, 1.05, 0.05, std(0x3a6ea5, { roughness: 0.15, metalness: 0.3 }), 32);
+      water.castShadow = false; g.add(put(water, 0, 0.025, 0));
+      const arch = new THREE.Mesh(new THREE.TorusGeometry(0.6, 0.1, 10, 24, Math.PI), std(0xb0906a));
+      arch.castShadow = true; arch.position.y = 0.05; arch.rotation.y = 0.5;
+      g.add(arch);
+      return g;
+    }
+    function makePagoda() { // 杭州 · 雷峰塔
+      const g = new THREE.Group();
+      const tiers = [[0.34, 0.4, 0.35, 0.5, 0.2], [0.26, 0.32, 0.3, 0.4, 0.17], [0.18, 0.24, 0.26, 0.3, 0.15]];
+      let y = 0;
+      tiers.forEach(([rt, rb, h, cr, ch]) => {
+        g.add(put(cyl(rt, rb, h, std(0x9a6a45), 6), 0, y + h / 2, 0));
+        y += h;
+        g.add(put(cone(cr, ch, std(0x54402e), 6), 0, y + ch / 2, 0));
+        y += ch * 0.6;
+      });
+      g.add(put(cyl(0.02, 0.02, 0.3, std(0xe8c34a), 8), 0, y + 0.12, 0));
+      return g;
+    }
+    function makeTeaTable() { // 杭州 · 茶桌 + 龙井
+      const g = new THREE.Group();
+      g.add(put(cyl(0.07, 0.09, 0.42, woodDark), 0, 0.21, 0));
+      g.add(put(cyl(0.45, 0.45, 0.06, wood), 0, 0.45, 0));
+      g.add(put(cyl(0.06, 0.045, 0.09, std(0xf5f2ea), 12), 0.12, 0.52, 0.05));
+      g.add(put(cyl(0.045, 0.045, 0.012, glow(0x9ab54a, 0.5), 12), 0.12, 0.57, 0.05));
+      return g;
+    }
+    function makeSkyline() { // 深圳 · 平安大厦天际线模型
+      const g = new THREE.Group();
+      g.add(put(box(0.95, 0.08, 0.95, std(0x333a44)), 0, 0.04, 0));
+      const tower = put(cyl(0.16, 0.42, 1.9, std(0x6a86a8, { roughness: 0.4, metalness: 0.3 }), 4), 0, 1.03, 0);
+      tower.rotation.y = Math.PI / 4; g.add(tower);
+      g.add(put(box(0.05, 1.7, 0.05, glow(0x4dabf7, 2.2)), 0.22, 0.95, 0.22));
+      g.add(put(cyl(0.015, 0.015, 0.4, frameBlack, 8), 0, 2.18, 0));
+      g.add(put(box(0.35, 1.1, 0.35, std(0x8a9ab0, { roughness: 0.5 })), 0.62, 0.63, -0.2));
+      return g;
+    }
+
+    /* ══════════ 四个房间的城市元素 + 家具（对照照片的暖色小窝氛围） ══════════ */
+    // 一层西 · 北京
+    {
+      const y = CITIES.beijing.pos.y;
+      const wall = put(box(4.2, 2.1, 0.1, std(CITIES.beijing.accent)), -2.25, y + 1.05, -2.88);
+      wall.receiveShadow = true; house.add(wall); // 故宫红墙
+      house.add(put(makeBed(0xc0392b), -3.25, y, -1.35));
+      house.add(put(makeRug(1.1, 0x8a5a4a), -2.1, y + 0.025, 1.0));
+      house.add(put(makeTemple(), -1.1, y, -2.35));
+      house.add(put(makeLantern(), -2.25, 2.51, 0.6));
+      house.add(put(makeLamp(), -4.0, y, 2.3));
+      house.add(put(cyl(0.3, 0.3, 0.06, glow(0xffe8c0, 1.2), 16), -2.25, 2.52, -0.2)); // 吸顶灯
+    }
+    // 一层东 · 上海
+    {
+      const y = CITIES.shanghai.pos.y;
+      const wall = put(box(4.2, 2.1, 0.1, std(CITIES.shanghai.accent)), 2.25, y + 1.05, -2.88);
+      wall.receiveShadow = true; house.add(wall);
+      house.add(put(makeDesk(0x66d9e8), 3.25, y, -2.15));
+      const door = put(makeShikumen(), 0.22, y, 0.35); door.rotation.y = Math.PI / 2;
+      house.add(door);
+      house.add(put(makePearlTower(), 3.6, y, 1.9));
+      house.add(put(makeBed(0x8d5a7a), 3.4, y, -0.6));
+      house.add(put(makeRug(1.0, 0x6a5a72), 1.5, y + 0.025, 1.5));
+      house.add(put(makeLamp(), 0.6, y, 2.4));
+      house.add(put(cyl(0.3, 0.3, 0.06, glow(0xffe8c0, 1.2), 16), 2.25, 2.52, -0.2));
+    }
+    // 二层西 · 杭州
+    {
+      const y = CITIES.hangzhou.pos.y;
+      const wall = put(box(4.2, 2.1, 0.1, std(CITIES.hangzhou.accent)), -2.25, y + 1.05, -2.88);
+      wall.receiveShadow = true; house.add(wall);
+      house.add(put(makeBridge(), -2.3, y, 1.1));
+      house.add(put(makeTree(0.9), -3.5, y, -2.2)); // 柳树
+      house.add(put(makePagoda(), -1.15, y, -2.35));
+      house.add(put(makeTeaTable(), -1.4, y, 0.2));
+      house.add(put(makeBed(0x5e7d5a), -3.25, y, 0.6));
+      house.add(put(makeLamp(), -0.7, y, 2.3));
+      house.add(put(cyl(0.3, 0.3, 0.06, glow(0xffe8c0, 1.2), 16), -2.25, 4.96, -0.2));
+    }
+    // 二层东 · 深圳
+    {
+      const y = CITIES.shenzhen.pos.y;
+      const wall = put(box(4.2, 2.1, 0.1, std(CITIES.shenzhen.accent)), 2.25, y + 1.05, -2.88);
+      wall.receiveShadow = true; house.add(wall);
+      house.add(put(box(3.4, 0.07, 0.06, glow(0x4dabf7, 2.4)), 2.25, y + 1.85, -2.8)); // 霓虹灯带
+      house.add(put(makeDesk(0x4dabf7, 0xb197fc), 3.25, y, -2.15)); // 双屏工作台
+      house.add(put(makeSkyline(), 1.25, y, -2.3));
+      house.add(put(makeRug(1.05, 0x2f3f55), 2.6, y + 0.025, 0.9));
+      const bean = put(sph(0.45, std(0xd06040)), 3.5, y + 0.27, 1.6); bean.scale.y = 0.6;
+      house.add(bean);
+      house.add(put(makeLamp(), 0.65, y, 1.9));
+      house.add(put(cyl(0.3, 0.3, 0.06, glow(0xffe8c0, 1.2), 16), 2.25, 4.96, -0.2));
+    }
+    // 每间房一盏暖光点光源（夜晚氛围的关键）
+    Object.values(CITIES).forEach(c => {
+      const p = new THREE.PointLight(0xffd2a0, 12, 8, 1.8);
+      p.position.set(c.pos.x, c.pos.y + 1.75, -0.3);
+      house.add(p);
+    });
+
+    /* ══════════ 高达（原型机配色：白/蓝/红/黄，站在屋旁守护） ══════════ */
+    const gundam = new THREE.Group();
+    let gundamHead;
+    {
+      const white = std(0xe9eaf0, { roughness: 0.5, metalness: 0.25 });
+      const blue = std(0x2b4c9b, { roughness: 0.5, metalness: 0.3 });
+      const red = std(0xc23b3b, { roughness: 0.5, metalness: 0.25 });
+      const yellow = std(0xe8c34a, { roughness: 0.45, metalness: 0.3 });
+      const dark = std(0x3a3f4a, { roughness: 0.6 });
+
+      [-1, 1].forEach(s => {
+        gundam.add(put(box(1.05, 0.32, 1.55, red), s * 0.62, 0.16, 0.18));   // 脚
+        gundam.add(put(box(0.62, 1.45, 0.85, white), s * 0.62, 1.05, 0));    // 小腿
+        gundam.add(put(box(0.72, 1.25, 0.8, white), s * 0.62, 2.32, 0));     // 大腿
+        gundam.add(put(box(0.95, 0.9, 1.15, white), s * 1.55, 4.45, 0));     // 肩
+        gundam.add(put(box(0.48, 1.05, 0.52, white), s * 1.55, 3.6, 0));     // 上臂
+        gundam.add(put(box(0.55, 1.0, 0.58, white), s * 1.55, 2.75, 0));     // 前臂
+        gundam.add(put(box(0.57, 0.16, 0.6, yellow), s * 1.55, 2.32, 0));    // 腕甲
+        gundam.add(put(box(0.4, 0.42, 0.5, dark), s * 1.55, 2.05, 0));       // 手
+      });
+      gundam.add(put(box(1.75, 0.6, 1.05, red), 0, 3.1, 0));                 // 腰甲
+      gundam.add(put(box(0.6, 0.4, 0.12, yellow), 0, 2.92, 0.58));           // 前裙甲
+      gundam.add(put(box(0.95, 0.5, 0.85, dark), 0, 3.55, 0));               // 腹
+      gundam.add(put(box(2.15, 1.05, 1.25, white), 0, 4.35, 0));             // 胸
+      gundam.add(put(box(0.65, 0.62, 0.12, blue), -0.62, 4.42, 0.6));        // 胸口蓝色进气口
+      gundam.add(put(box(0.65, 0.62, 0.12, blue), 0.62, 4.42, 0.6));
+      gundam.add(put(box(0.34, 0.45, 0.1, red), 0, 4.2, 0.63));              // 驾驶舱
+      gundam.add(put(box(1.35, 0.85, 0.45, white), 0, 4.4, -0.8));           // 背包
+      gundam.add(put(cyl(0.16, 0.2, 0.45, dark), -0.4, 4.95, -0.85));        // 推进器
+      gundam.add(put(cyl(0.16, 0.2, 0.45, dark), 0.4, 4.95, -0.85));
+      gundam.add(put(box(0.14, 2.0, 1.15, white), -2.25, 3.35, 0.1));        // 盾牌
+      gundam.add(put(box(0.05, 1.5, 0.22, red), -2.34, 3.4, 0.1));           // 盾牌红十字
+      gundam.add(put(box(0.05, 0.22, 0.9, red), -2.34, 3.55, 0.1));
+      gundam.add(put(cyl(0.18, 0.22, 0.25, dark), 0, 5.0, 0));               // 脖子
+
+      gundamHead = new THREE.Group(); // 头部单独成组，可以转头"看"镜头
+      gundamHead.add(put(box(0.8, 0.72, 0.78, white), 0, 5.45, 0));
+      gundamHead.add(put(box(0.5, 0.16, 0.08, dark), 0, 5.52, 0.4));         // 面罩
+      gundamHead.add(put(box(0.2, 0.07, 0.04, glow(0xd8ff5e, 2.5)), 0, 5.55, 0.44)); // 双眼
+      gundamHead.add(put(box(0.22, 0.18, 0.1, red), 0, 5.28, 0.4));          // 红下巴
+      gundamHead.add(put(box(0.12, 0.12, 0.07, yellow), 0, 5.88, 0.38));     // V 角根部
+      const finL = put(box(0.55, 0.1, 0.07, yellow), -0.3, 5.95, 0.35); finL.rotation.z = -0.5;
+      const finR = put(box(0.55, 0.1, 0.07, yellow), 0.3, 5.95, 0.35); finR.rotation.z = 0.5;
+      gundamHead.add(finL, finR);                                            // V 角（高达的灵魂）
+      gundamHead.add(put(box(0.12, 0.3, 0.5, yellow), -0.46, 5.45, 0));      // 侧黄条
+      gundamHead.add(put(box(0.12, 0.3, 0.5, yellow), 0.46, 5.45, 0));
+      gundam.add(gundamHead);
+
+      gundam.scale.setScalar(1.32);
+      gundam.position.set(11.3, 0.12, 0.8);
+      gundam.rotation.y = -Math.PI / 2; // 面向房子
+      scene.add(gundam);
+    }
+
+    /* ══════════ 星空 + 月亮 ══════════ */
+    {
+      const n = 1200, pos = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) {
+        const r = 70 + Math.random() * 80, th = Math.random() * Math.PI * 2, ph = Math.acos(2 * Math.random() - 1);
+        pos[i * 3] = r * Math.sin(ph) * Math.cos(th);
+        pos[i * 3 + 1] = r * Math.cos(ph);
+        pos[i * 3 + 2] = r * Math.sin(ph) * Math.sin(th);
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      var starField = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.55, transparent: true, opacity: 0.85 }));
+      scene.add(starField);
+      scene.add(put(sph(3.2, new THREE.MeshBasicMaterial({ color: 0xe9edff }), 24), -42, 34, -58)); // 月亮
+    }
+
+    /* ══════════ "当前基地"信标：光柱 + 地面光环（跟着你换 base 移动） ══════════ */
+    const beamMat = new THREE.MeshBasicMaterial({
+      color: 0xff5040, transparent: true, opacity: 0.14,
+      side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.95, 7, 20, 1, true), beamMat);
+    beam.position.set(0, 10.3, -0.3);
+    scene.add(beam);
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0xff5040, transparent: true, opacity: 0.9 });
+    const baseRing = new THREE.Mesh(new THREE.TorusGeometry(1.25, 0.055, 10, 40), ringMat);
+    baseRing.rotation.x = Math.PI / 2;
+    scene.add(baseRing);
+
+    /* ══════════ 拾取：点击房间换 base，点击高达会跳一下 ══════════ */
+    const pickMat = new THREE.MeshBasicMaterial({ visible: false });
+    const pickables = [], highlights = {};
+    Object.entries(CITIES).forEach(([id, c]) => {
+      const b = new THREE.Mesh(new THREE.BoxGeometry(4.2, 2.35, 5.8), pickMat);
+      b.position.set(c.pos.x, c.pos.y + 1.175, 0);
+      b.userData.city = id;
+      scene.add(b); pickables.push(b);
+      const hi = new THREE.Mesh(
+        b.geometry,
+        new THREE.MeshBasicMaterial({ color: c.color, transparent: true, opacity: 0, depthWrite: false })
+      );
+      hi.position.copy(b.position);
+      scene.add(hi); highlights[id] = hi;
+    });
+    const gundamHit = new THREE.Mesh(new THREE.BoxGeometry(3.2, 8.2, 3.2), pickMat);
+    gundamHit.position.y = 4.1;
+    gundamHit.userData.gundam = true;
+    gundam.add(gundamHit); pickables.push(gundamHit);
+
+    /* ══════════ UI：城市按钮 / 状态栏 / 信息卡片 ══════════ */
+    const chipsEl = document.getElementById('chips');
+    const statusEl = document.getElementById('status');
+    const panel = document.getElementById('panel');
+    const panelTitle = document.getElementById('panel-title');
+    const panelDesc = document.getElementById('panel-desc');
+    const panelMeta = document.getElementById('panel-meta');
+
+    Object.entries(CITIES).forEach(([id, c]) => {
+      const b = document.createElement('button');
+      b.className = 'chip'; b.dataset.city = id; b.textContent = c.name;
+      b.onclick = () => selectCity(id, { fly: true });
+      chipsEl.appendChild(b);
+    });
+    const homeChip = document.createElement('button');
+    homeChip.className = 'chip'; homeChip.textContent = '🏠 全景';
+    homeChip.onclick = () => startFly({ p: new THREE.Vector3(17, 9, 20), t: new THREE.Vector3(2.5, 2.8, 0) });
+    chipsEl.appendChild(homeChip);
+
+    /* ══════════ 相机飞行（点击房间/按钮后平滑飞过去） ══════════ */
+    let fly = null;
+    const easeInOut = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+    function startFly(v) { fly = { t: 0, dur: 1.15, fp: camera.position.clone(), tp: v.p, ft: controls.target.clone(), tt: v.t }; }
+    function roomView(id) {
+      const c = CITIES[id], s = Math.sign(c.pos.x);
+      return {
+        p: new THREE.Vector3(c.pos.x * 0.55 + s * 0.7, c.pos.y + 2.3, 7.6),
+        t: new THREE.Vector3(c.pos.x * 0.9, c.pos.y + 0.95, -1.2),
+      };
+    }
+
+    let activeCity = null;
+    function selectCity(id, { fly: doFly = true } = {}) {
+      const c = CITIES[id]; if (!c) return;
+      activeCity = id;
+      beam.position.set(c.pos.x, 10.3, -0.3);
+      beamMat.color.set(c.color);
+      baseRing.position.set(c.pos.x, c.pos.y + 0.14, -0.3);
+      ringMat.color.set(c.color);
+      document.documentElement.style.setProperty('--acc', c.css);
+      document.querySelectorAll('.chip[data-city]').forEach(b => b.classList.toggle('active', b.dataset.city === id));
+      statusEl.innerHTML = `📍 当前基地：<b>${c.name}</b>`;
+      panelTitle.textContent = `${c.name}${id === MY_CURRENT_BASE ? ' · 我的基地' : ''}`;
+      panelDesc.textContent = c.desc;
+      panelMeta.textContent = c.meta;
+      panel.classList.add('show');
+      if (doFly) startFly(roomView(id));
+    }
+
+    /* ══════════ 鼠标交互：拖拽 vs 点击 区分 + 悬停高亮 ══════════ */
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    let hopT = 1, downX = 0, downY = 0;
+
+    function raycast(e) {
+      pointer.x = (e.clientX / innerWidth) * 2 - 1;
+      pointer.y = -(e.clientY / innerHeight) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      return raycaster.intersectObjects(pickables, false)[0];
+    }
+    renderer.domElement.addEventListener('pointerdown', e => { downX = e.clientX; downY = e.clientY; fly = null; });
+    renderer.domElement.addEventListener('pointerup', e => {
+      if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) return;
+      const hit = raycast(e);
+      if (!hit) return;
+      if (hit.object.userData.city) selectCity(hit.object.userData.city, { fly: true });
+      if (hit.object.userData.gundam) hopT = 0; // 点高达：跳一下
+    });
+    renderer.domElement.addEventListener('pointermove', e => {
+      const hit = raycast(e);
+      Object.values(highlights).forEach(h => h.material.opacity = 0);
+      if (hit && hit.object.userData.city) {
+        highlights[hit.object.userData.city].material.opacity = 0.1;
+        renderer.domElement.style.cursor = 'pointer';
+      } else if (hit && hit.object.userData.gundam) {
+        renderer.domElement.style.cursor = 'pointer';
+      } else {
+        renderer.domElement.style.cursor = 'grab';
+      }
+    });
+
+    /* ══════════ 动画循环 ══════════ */
+    const clock = new THREE.Clock();
+    renderer.setAnimationLoop(() => {
+      const dt = Math.min(clock.getDelta(), 0.05);
+      const t = clock.elapsedTime;
+
+      gundam.position.y = 0.12 + Math.sin(t * 0.9) * 0.05;                    // 呼吸感
+      if (hopT < 1) {                                                        // 被点会跳
+        hopT = Math.min(hopT + dt * 1.1, 1);
+        gundam.position.y += Math.abs(Math.sin(hopT * Math.PI)) * 1.2;
+      }
+      gundamHead.rotation.y = Math.sin(t * 0.4) * 0.2;                       // 偶尔转头
+
+      beamMat.opacity = 0.11 + Math.sin(t * 2.2) * 0.05;                     // 光柱呼吸
+      baseRing.rotation.z += dt * 0.8;                                       // 光环旋转
+      starField.rotation.y += dt * 0.004;                                    // 星空流动
+
+      if (fly) {                                                             // 相机飞行
+        fly.t = Math.min(fly.t + dt / fly.dur, 1);
+        const e = easeInOut(fly.t);
+        camera.position.lerpVectors(fly.fp, fly.tp, e);
+        controls.target.lerpVectors(fly.ft, fly.tt, e);
+        if (fly.t >= 1) fly = null;
+      }
+      controls.update();
+      renderer.render(scene, camera);
+    });
+
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    // 开场：先显示全景，然后飞到"当前基地"
+    selectCity(initialBase, { fly: false });
+    setTimeout(() => startFly(roomView(initialBase)), 700);
+  </script>
+</body>
+</html>

@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>我的第一个 3D 网页 · three.js</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #050510; }
+    /* three.js 会往 body 里插入 canvas，让它铺满全屏 */
+    canvas { display: block; }
+
+    /* 界面上的文字浮层（pointer-events:none 保证不挡住鼠标拖拽） */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: #eaf0ff;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 28px 32px;
+    }
+    .overlay h1 { font-size: 22px; font-weight: 600; letter-spacing: 1px; }
+    .overlay .sub { margin-top: 6px; font-size: 13px; opacity: .65; }
+    .overlay .tips {
+      align-self: flex-end;
+      font-size: 13px;
+      opacity: .75;
+      text-align: right;
+      line-height: 1.9;
+    }
+    .overlay .tips kbd {
+      background: rgba(255,255,255,.12);
+      border: 1px solid rgba(255,255,255,.25);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-size: 12px;
+    }
+  </style>
+
+  <!--
+    import map：告诉浏览器 "three" 这个名字从哪里加载。
+    这是 three.js 官方现在推荐的方式，不需要 webpack/vite 等构建工具。
+    注意：主库和插件(addons)必须用同一个版本号、同一个 CDN。
+  -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div class="overlay">
+    <div>
+      <h1>我的第一个 3D 网页 🪐</h1>
+      <div class="sub">three.js v0.186 · 场景 / 相机 / 灯光 / 动画循环 / 交互</div>
+    </div>
+    <div class="tips">
+      <kbd>鼠标左键拖拽</kbd> 旋转视角<br />
+      <kbd>滚轮</kbd> 缩放 · <kbd>右键拖拽</kbd> 平移<br />
+      <kbd>点击星球</kbd> 换一个颜色
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    /* ======================================================
+     * 1. 场景（Scene）—— 3D 世界的"容器"，所有物体都放在里面
+     * ====================================================== */
+    const scene = new THREE.Scene();
+
+    /* ======================================================
+     * 2. 相机（Camera）—— 观察这个世界的"眼睛"
+     *    PerspectiveCamera(视角, 宽高比, 近平面, 远平面)
+     * ====================================================== */
+    const camera = new THREE.PerspectiveCamera(
+      45,                                // 视野角：越大看得越广，透视越夸张
+      window.innerWidth / window.innerHeight,
+      0.1,
+      1000
+    );
+    camera.position.set(0, 4.5, 14);     // 把相机放在 z 轴正方向、稍微抬高一点
+    camera.lookAt(0, 0, 0);              // 看向原点
+
+    /* ======================================================
+     * 3. 渲染器（Renderer）—— 把场景"画"到网页上
+     *    底层就是浏览器的 WebGL
+     * ====================================================== */
+    const renderer = new THREE.WebGLRenderer({ antialias: true }); // 抗锯齿
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // 高分屏更清晰，且不浪费性能
+    renderer.shadowMap.enabled = true;                            // 开启阴影
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;           // 电影级色调映射，颜色更好看
+    document.body.appendChild(renderer.domElement);
+
+    /* ======================================================
+     * 4. 灯光（Light）—— three.js 的物体默认是黑的，必须打光
+     * ====================================================== */
+    // 环境光：均匀照亮所有面，避免暗部全黑
+    const ambientLight = new THREE.AmbientLight(0x8899ff, 0.5);
+    scene.add(ambientLight);
+
+    // 平行光：模拟"太阳"，带方向，能产生阴影
+    const sunLight = new THREE.DirectionalLight(0xfff0dd, 3);
+    sunLight.position.set(-8, 6, 8);          // 光从左上方打过来
+    sunLight.castShadow = true;
+    sunLight.shadow.camera.left = -10;        // 阴影相机的拍摄范围（默认太小会截断阴影）
+    sunLight.shadow.camera.right = 10;
+    sunLight.shadow.camera.top = 10;
+    sunLight.shadow.camera.bottom = -10;
+    scene.add(sunLight);
+
+    /* ======================================================
+     * 5. 物体（Mesh = 几何体 + 材质）
+     *    这里做一个"带光环的行星 + 卫星"
+     * ====================================================== */
+    // 行星本体：球体 + 标准材质（PBR，受光照影响）
+    const planet = new THREE.Mesh(
+      new THREE.SphereGeometry(2.2, 64, 64),           // 半径 2.2，64x64 分段更圆滑
+      new THREE.MeshStandardMaterial({
+        color: 0x4c6ef5,
+        roughness: 0.55,   // 粗糙度：0=镜面，1=哑光
+        metalness: 0.2,    // 金属度
+      })
+    );
+    planet.castShadow = true;
+    scene.add(planet);
+
+    // 光环：环形几何体，平放在行星"赤道"上
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(3, 4.6, 128),
+      new THREE.MeshStandardMaterial({
+        color: 0xffd8a8,
+        side: THREE.DoubleSide,   // 双面渲染，从背面看也可见
+        transparent: true,
+        opacity: 0.85,
+        roughness: 0.8,
+      })
+    );
+    ring.rotation.x = -Math.PI / 2;   // 默认竖着放，转 90° 变成水平
+    ring.receiveShadow = true;        // 行星的影子会投在环上（日食效果！）
+    scene.add(ring);
+
+    // 整组再倾斜一点，姿态更好看
+    const planetGroup = new THREE.Group();
+    planetGroup.add(planet, ring);
+    planetGroup.rotation.z = 0.35;
+    scene.add(planetGroup);
+
+    // 卫星：挂在一个"轴"对象上，转轴=公转（three.js 里非常常用的技巧）
+    const moonPivot = new THREE.Group();   // 轴放在原点
+    const moon = new THREE.Mesh(
+      new THREE.SphereGeometry(0.45, 32, 32),
+      new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.9 })
+    );
+    moon.position.x = 6.2;          // 卫星离行星的距离
+    moon.castShadow = true;
+    moonPivot.add(moon);
+    scene.add(moonPivot);
+
+    /* ======================================================
+     * 6. 星空背景：1500 个随机分布的点（Points）
+     * ====================================================== */
+    const starCount = 1500;
+    const positions = new Float32Array(starCount * 3);
+    for (let i = 0; i < starCount; i++) {
+      // 在一个"球壳"里随机撒点，保证星星把相机包围住
+      const r = 60 + Math.random() * 90;
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      positions[i * 3]     = r * Math.sin(phi) * Math.cos(theta);
+      positions[i * 3 + 1] = r * Math.cos(phi);
+      positions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+    }
+    const starGeometry = new THREE.BufferGeometry();
+    starGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const starField = new THREE.Points(
+      starGeometry,
+      new THREE.PointsMaterial({ color: 0xffffff, size: 0.6, transparent: true, opacity: 0.9 })
+    );
+    scene.add(starField);
+
+    /* ======================================================
+     * 7. 轨道控制器（addon 插件）—— 鼠标拖拽/缩放/平移
+     *    这是导入 "three/addons/..." 的原因
+     * ====================================================== */
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;   // 阻尼：拖拽有"惯性"，手感更顺滑
+    controls.dampingFactor = 0.05;
+    controls.minDistance = 5;        // 别让用户缩太近穿模
+    controls.maxDistance = 60;
+
+    /* ======================================================
+     * 8. 交互：Raycaster（射线拾取）—— 点击星球换颜色
+     *    原理：从鼠标位置向场景里发射一条射线，看打中了哪个物体
+     * ====================================================== */
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    const palette = [0x4c6ef5, 0xff6b9d, 0x20c997, 0xffa94d, 0xb197fc, 0x22b8cf];
+    let colorIndex = 0;
+
+    function pick(e) {
+      // 把鼠标坐标换算成 NDC 标准坐标（-1 ~ +1）
+      pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+      pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      return raycaster.intersectObject(planet).length > 0;
+    }
+
+    // 拖拽结束也算一次 click，所以先记录按下位置，位移很小才算"点击"
+    let downX = 0, downY = 0;
+    renderer.domElement.addEventListener('pointerdown', e => { downX = e.clientX; downY = e.clientY; });
+    renderer.domElement.addEventListener('pointerup', e => {
+      const moved = Math.hypot(e.clientX - downX, e.clientY - downY);
+      if (moved < 6 && pick(e)) {
+        colorIndex = (colorIndex + 1) % palette.length;
+        planet.material.color.set(palette[colorIndex]);
+      }
+    });
+    // 鼠标悬停在星球上时，光标变成小手
+    renderer.domElement.addEventListener('pointermove', e => {
+      renderer.domElement.style.cursor = pick(e) ? 'pointer' : 'grab';
+    });
+
+    /* ======================================================
+     * 9. 动画循环（渲染循环）—— 每帧更新并重绘
+     *    用 setAnimationLoop 比 requestAnimationFrame 更省心
+     * ====================================================== */
+    const clock = new THREE.Clock(); // 用真实流逝的时间驱动动画，帧率不同速度也一致
+
+    renderer.setAnimationLoop(() => {
+      const dt = clock.getDelta();    // 距上一帧过了几秒
+
+      planet.rotation.y += dt * 0.15; // 行星自转
+      moonPivot.rotation.y += dt * 0.9;   // 卫星公转（转的是轴，不是卫星本身）
+      moon.rotation.y += dt * 0.9;
+      starField.rotation.y += dt * 0.008; // 星空缓慢流动
+
+      controls.update();              // 开了阻尼后必须每帧调用
+      renderer.render(scene, camera); // 真正的"画"
+    });
+
+    /* ======================================================
+     * 10. 窗口变化：同步更新相机宽高比和渲染器尺寸
+     * ====================================================== */
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
